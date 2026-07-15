@@ -165,14 +165,23 @@ export const useStore = create<LoomStore>((set, get) => ({
 
   async openVaultPath(path: string) {
     await get().closeNote();
+    if (graphTimer) {
+      clearTimeout(graphTimer);
+      graphTimer = null;
+    }
     set({ phase: "opening", error: null });
     try {
       const snapshot = await ipc.openVault(path);
+      // The old vault's graph is meaningless now — drop it and refetch if
+      // the graph view is what's on screen.
       set({
         phase: "ready",
         vaultRoot: snapshot.root,
         notes: sortNotes(snapshot.notes),
+        graph: null,
+        graphLoading: false,
       });
+      if (get().view === "graph") void get().loadGraph();
     } catch (e) {
       set((s) => ({
         phase: s.vaultRoot ? "ready" : "noVault",
@@ -330,9 +339,12 @@ export const useStore = create<LoomStore>((set, get) => ({
 
   async loadGraph() {
     if (get().graphLoading) return;
+    const vaultAtRequest = get().vaultRoot;
     set((s) => ({ graphLoading: s.graph === null }));
     try {
       const graph = await ipc.getGraph();
+      // A vault switch mid-flight makes this snapshot stale — drop it.
+      if (get().vaultRoot !== vaultAtRequest) return;
       set({ graph, graphLoading: false });
     } catch (e) {
       set({ graphLoading: false });

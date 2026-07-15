@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useStore } from "../state/store";
+import { LoomLogo } from "./Logo";
 import type { NoteMeta } from "../lib/types";
 
 function vaultName(root: string): string {
@@ -90,6 +91,9 @@ export function Sidebar() {
 
   return (
     <aside className="sidebar">
+      <div className="brand-row">
+        <LoomLogo size={20} />
+      </div>
       <header className="sidebar-header">
         <button
           className="vault-name"

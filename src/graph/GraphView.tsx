@@ -2,25 +2,42 @@
  * 3D knowledge graph view (react-force-graph-3d / Three.js WebGL).
  * Consumes graph snapshots from the store; rendering-only module.
  *
- * Interactions: orbit (drag), zoom (wheel), pan (right-drag), hover for
- * label, click a note to open it, click a phantom to create that note.
- * Visuals: bloom glow, text labels under nodes (small/medium graphs),
- * auto zoom-to-fit once the force layout settles.
+ * Interactions: orbit (drag), zoom (wheel), pan (right-drag), click a note
+ * to open it, click a phantom to create that note. Hovering a node focuses
+ * it: the node + direct neighbors light up, the rest dims away.
+ * Anti-clutter: faint links, depth fog, adaptive bloom, auto zoom-to-fit.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph3D from "react-force-graph-3d";
 import SpriteText from "three-spritetext";
+import { FogExp2 } from "three";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { useStore } from "../state/store";
 import type { GraphNode } from "../lib/types";
 
-const COLOR_NOTE = "#5b9dff";
-const COLOR_NOTE_HUB = "#8fc1ff";
-const COLOR_PHANTOM = "#5a6890";
-const COLOR_CURRENT = "#4de1ff";
-const COLOR_LINK = "#31497f";
+const COLOR_NOTE = "#e893c0";
+const COLOR_NOTE_HUB = "#f5c3de";
+const COLOR_PHANTOM = "#6f6169";
+const COLOR_CURRENT = "#ffeaf5";
+const COLOR_HOVER = "#f9cfe6";
+const COLOR_DIM = "#251a21";
+const COLOR_LINK = "#533247";
+const COLOR_LINK_HOVER = "#ef9ecb";
+const COLOR_LINK_DIM = "#170f15";
 const LABEL_LIMIT = 400; // above this, labels only on hover
+
+interface LinkEnd {
+  id: string;
+}
+interface RuntimeLink {
+  source: string | LinkEnd;
+  target: string | LinkEnd;
+}
+
+function endId(end: string | LinkEnd): string {
+  return typeof end === "object" ? end.id : end;
+}
 
 /** Frames-per-second probe: honest numbers for the stress test. */
 function FpsMeter({ nodes, links }: { nodes: number; links: number }) {
@@ -49,17 +66,6 @@ function FpsMeter({ nodes, links }: { nodes: number; links: number }) {
   );
 }
 
-/* DEV: forward uncaught errors to the local collector while the black-graph
- * fix is being confirmed; stripped once verified. */
-if (import.meta.env.DEV) {
-  window.addEventListener("error", (e) =>
-    void fetch("http://127.0.0.1:8932/log", {
-      method: "POST",
-      body: `window.onerror ${e.message} @ ${e.filename}:${e.lineno}`,
-    }).catch(() => {}),
-  );
-}
-
 export function GraphView() {
   const graph = useStore((s) => s.graph);
   const graphLoading = useStore((s) => s.graphLoading);
@@ -69,6 +75,7 @@ export function GraphView() {
   const fgRef = useRef<any>(null);
   const didFitRef = useRef(false);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  const [hoverId, setHoverId] = useState<string | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -80,13 +87,14 @@ export function GraphView() {
     return () => ro.disconnect();
   }, []);
 
-  // Bloom pass: a *subtle* glow. Strength adapts down as node count grows —
-  // additive light stacks up fast on dense graphs (the plasma-ball incident).
   const nodeCount = graph?.nodes.length ?? 0;
+
+  // Subtle bloom; strength adapts down as node count grows (additive light
+  // stacks up fast on dense graphs).
   useEffect(() => {
     const fg = fgRef.current;
     if (!fg || nodeCount === 0) return;
-    const strength = nodeCount > 2000 ? 0.12 : nodeCount > 500 ? 0.22 : 0.45;
+    const strength = nodeCount > 2000 ? 0.12 : nodeCount > 500 ? 0.22 : 0.4;
     const bloom = new UnrealBloomPass(undefined as never, strength, 0.4, 0.1);
     fg.postProcessingComposer().addPass(bloom);
     return () => {
@@ -95,6 +103,18 @@ export function GraphView() {
       } catch {
         /* composer may already be disposed */
       }
+    };
+  }, [nodeCount === 0, nodeCount > 500, nodeCount > 2000]);
+
+  // Depth fog: distant nodes fade out instead of stacking into noise.
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg || nodeCount === 0) return;
+    const density = nodeCount > 2000 ? 0.0007 : nodeCount > 500 ? 0.001 : 0.0014;
+    const scene = fg.scene();
+    scene.fog = new FogExp2(0x0f0c0f, density);
+    return () => {
+      scene.fog = null;
     };
   }, [nodeCount === 0, nodeCount > 500, nodeCount > 2000]);
 
@@ -120,8 +140,49 @@ export function GraphView() {
     };
   }, [graph]);
 
+  // Adjacency for hover focus.
+  const neighbors = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const l of data.links) {
+      const s = endId(l.source as string | LinkEnd);
+      const t = endId(l.target as string | LinkEnd);
+      if (!map.has(s)) map.set(s, new Set());
+      if (!map.has(t)) map.set(t, new Set());
+      map.get(s)!.add(t);
+      map.get(t)!.add(s);
+    }
+    return map;
+  }, [data]);
+
   const large = data.nodes.length > 2000;
   const showLabels = data.nodes.length <= LABEL_LIMIT;
+  const hoverSet = hoverId ? neighbors.get(hoverId) : undefined;
+
+  const nodeColor = useCallback(
+    (n: object) => {
+      const node = n as GraphNode;
+      if (hoverId) {
+        if (node.id === hoverId) return COLOR_HOVER;
+        if (hoverSet?.has(node.id)) return COLOR_NOTE_HUB;
+        return COLOR_DIM;
+      }
+      if (node.id === currentId) return COLOR_CURRENT;
+      if (node.kind === "phantom") return COLOR_PHANTOM;
+      return node.degree >= 6 ? COLOR_NOTE_HUB : COLOR_NOTE;
+    },
+    [hoverId, hoverSet, currentId],
+  );
+
+  const linkColor = useCallback(
+    (l: object) => {
+      if (!hoverId) return COLOR_LINK;
+      const link = l as RuntimeLink;
+      const s = endId(link.source);
+      const t = endId(link.target);
+      return s === hoverId || t === hoverId ? COLOR_LINK_HOVER : COLOR_LINK_DIM;
+    },
+    [hoverId],
+  );
 
   if (graphLoading || !graph) {
     return (
@@ -147,12 +208,6 @@ export function GraphView() {
     );
   }
 
-  const colorOf = (node: GraphNode) => {
-    if (node.id === currentId) return COLOR_CURRENT;
-    if (node.kind === "phantom") return COLOR_PHANTOM;
-    return node.degree >= 6 ? COLOR_NOTE_HUB : COLOR_NOTE;
-  };
-
   return (
     <main className="graph-view" ref={containerRef}>
       <ForceGraph3D
@@ -160,7 +215,7 @@ export function GraphView() {
         width={size.w || undefined}
         height={size.h || undefined}
         graphData={data}
-        backgroundColor="rgba(4,6,11,0)"
+        backgroundColor="rgba(15,12,15,0)"
         showNavInfo={false}
         nodeLabel={(n) => {
           const node = n as GraphNode;
@@ -168,9 +223,9 @@ export function GraphView() {
             ? `${node.title} (not created yet — click to create)`
             : node.title;
         }}
-        nodeColor={(n) => colorOf(n as GraphNode)}
-        nodeRelSize={3}
-        nodeVal={(n) => Math.min(12, 1 + (n as GraphNode).degree * 0.4)}
+        nodeColor={nodeColor}
+        nodeRelSize={2.5}
+        nodeVal={(n) => Math.min(8, 1 + (n as GraphNode).degree * 0.3)}
         nodeOpacity={0.95}
         nodeResolution={large ? 6 : data.nodes.length > 400 ? 8 : 16}
         nodeThreeObjectExtend={true}
@@ -178,7 +233,7 @@ export function GraphView() {
           if (!showLabels) return false as unknown as never;
           const node = n as GraphNode;
           const sprite = new SpriteText(node.title);
-          sprite.color = node.kind === "phantom" ? "#7d8bb0" : "#c9daff";
+          sprite.color = node.kind === "phantom" ? "#8a8274" : "#e8ddc8";
           sprite.textHeight = 2.6;
           // SpriteText extends THREE.Sprite; its d.ts just doesn't say so.
           const obj = sprite as unknown as import("three").Sprite;
@@ -186,10 +241,14 @@ export function GraphView() {
           obj.position.set(0, -(4 + Math.sqrt(2 + node.degree) * 2), 0);
           return sprite;
         }}
-        linkColor={() => COLOR_LINK}
-        linkOpacity={data.nodes.length > 500 ? 0.3 : 0.5}
+        linkColor={linkColor}
+        linkOpacity={hoverId ? 0.5 : data.nodes.length > 500 ? 0.14 : 0.3}
         enableNodeDrag={!large}
         cooldownTime={large ? 8000 : 15000}
+        onNodeHover={(n) => {
+          const id = n ? (n as GraphNode).id : null;
+          setHoverId((prev) => (prev === id ? prev : id));
+        }}
         onEngineStop={() => {
           if (!didFitRef.current && fgRef.current) {
             didFitRef.current = true;

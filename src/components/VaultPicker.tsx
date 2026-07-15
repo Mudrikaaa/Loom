@@ -1,4 +1,5 @@
 import { useStore } from "../state/store";
+import { LoomLogo } from "./Logo";
 
 /** Full-screen empty state shown when no vault is open. */
 export function VaultPicker() {
@@ -6,7 +7,7 @@ export function VaultPicker() {
   return (
     <div className="vault-picker">
       <div className="vault-picker-card">
-        <div className="app-mark">Loom</div>
+        <LoomLogo size={44} />
         <p className="vault-picker-tagline">
           Local Markdown notes, woven into a 3D knowledge graph.
         </p>
