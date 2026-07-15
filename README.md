@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🧵 Loom
+# Loom
 
 ### Local-first Markdown notes with a 3D knowledge graph
 
