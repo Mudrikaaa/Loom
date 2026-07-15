@@ -49,6 +49,17 @@ function FpsMeter({ nodes, links }: { nodes: number; links: number }) {
   );
 }
 
+/* DEV: forward uncaught errors to the local collector while the black-graph
+ * fix is being confirmed; stripped once verified. */
+if (import.meta.env.DEV) {
+  window.addEventListener("error", (e) =>
+    void fetch("http://127.0.0.1:8932/log", {
+      method: "POST",
+      body: `window.onerror ${e.message} @ ${e.filename}:${e.lineno}`,
+    }).catch(() => {}),
+  );
+}
+
 export function GraphView() {
   const graph = useStore((s) => s.graph);
   const graphLoading = useStore((s) => s.graphLoading);
@@ -88,13 +99,14 @@ export function GraphView() {
   }, [nodeCount === 0, nodeCount > 500, nodeCount > 2000]);
 
   // Spread the layout: stronger repulsion + longer links keep dense vaults
-  // from collapsing into an unreadable ball.
+  // from collapsing into an unreadable ball. Configure only — never call
+  // d3ReheatSimulation() here: the engine ingests data asynchronously and
+  // reheating before that kills its animation loop (black-canvas bug).
   useEffect(() => {
     const fg = fgRef.current;
     if (!fg || nodeCount === 0) return;
     fg.d3Force("charge")?.strength(-70);
     fg.d3Force("link")?.distance(45);
-    fg.d3ReheatSimulation();
   }, [nodeCount === 0]);
 
   // The force engine mutates node objects (x/y/z...), so hand it copies and
