@@ -69,11 +69,14 @@ export function GraphView() {
     return () => ro.disconnect();
   }, []);
 
-  // Bloom pass: the glow that makes the constellation read as alive.
+  // Bloom pass: a *subtle* glow. Strength adapts down as node count grows —
+  // additive light stacks up fast on dense graphs (the plasma-ball incident).
+  const nodeCount = graph?.nodes.length ?? 0;
   useEffect(() => {
     const fg = fgRef.current;
-    if (!fg) return;
-    const bloom = new UnrealBloomPass(undefined as never, 1.1, 0.55, 0.0);
+    if (!fg || nodeCount === 0) return;
+    const strength = nodeCount > 2000 ? 0.12 : nodeCount > 500 ? 0.22 : 0.45;
+    const bloom = new UnrealBloomPass(undefined as never, strength, 0.4, 0.1);
     fg.postProcessingComposer().addPass(bloom);
     return () => {
       try {
@@ -82,7 +85,17 @@ export function GraphView() {
         /* composer may already be disposed */
       }
     };
-  }, [graph === null]);
+  }, [nodeCount === 0, nodeCount > 500, nodeCount > 2000]);
+
+  // Spread the layout: stronger repulsion + longer links keep dense vaults
+  // from collapsing into an unreadable ball.
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg || nodeCount === 0) return;
+    fg.d3Force("charge")?.strength(-70);
+    fg.d3Force("link")?.distance(45);
+    fg.d3ReheatSimulation();
+  }, [nodeCount === 0]);
 
   // The force engine mutates node objects (x/y/z...), so hand it copies and
   // keep the store's snapshot immutable.
@@ -144,9 +157,10 @@ export function GraphView() {
             : node.title;
         }}
         nodeColor={(n) => colorOf(n as GraphNode)}
-        nodeVal={(n) => 2 + (n as GraphNode).degree}
-        nodeOpacity={1}
-        nodeResolution={large ? 6 : 16}
+        nodeRelSize={3}
+        nodeVal={(n) => Math.min(12, 1 + (n as GraphNode).degree * 0.4)}
+        nodeOpacity={0.95}
+        nodeResolution={large ? 6 : data.nodes.length > 400 ? 8 : 16}
         nodeThreeObjectExtend={true}
         nodeThreeObject={(n: object) => {
           if (!showLabels) return false as unknown as never;
@@ -161,7 +175,7 @@ export function GraphView() {
           return sprite;
         }}
         linkColor={() => COLOR_LINK}
-        linkOpacity={0.55}
+        linkOpacity={data.nodes.length > 500 ? 0.3 : 0.5}
         enableNodeDrag={!large}
         cooldownTime={large ? 8000 : 15000}
         onEngineStop={() => {
