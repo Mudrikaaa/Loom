@@ -25,6 +25,13 @@ export interface BacklinkEntry {
   context: string;
 }
 
+export interface SearchHit {
+  id: string;
+  title: string;
+  /** First matching body line; empty when only the title matched. */
+  snippet: string;
+}
+
 export interface GraphNode {
   id: string;
   title: string;

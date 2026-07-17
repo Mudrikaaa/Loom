@@ -47,7 +47,7 @@ fn only_fence(s: &str, ch: u8) -> bool {
 }
 
 fn fence_open(s: &str) -> Option<(u8, usize)> {
-    for ch in [b'`', b'~'] {
+    for ch in *b"`~" {
         let run = fence_run(s, ch);
         if run >= 3 {
             return Some((ch, run));

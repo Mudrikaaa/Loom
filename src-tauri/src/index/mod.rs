@@ -59,9 +59,27 @@ pub struct GraphData {
     pub links: Vec<GraphLink>,
 }
 
+/// Note body kept in memory for search: original for snippets, lowercase
+/// for case-insensitive matching. ~1 KB/note ⇒ ~10 MB at 10k notes.
+#[derive(Debug, Default)]
+struct NoteText {
+    original: String,
+    lower: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    pub id: String,
+    pub title: String,
+    /// First matching line (trimmed/capped); empty for title-only matches.
+    pub snippet: String,
+}
+
 #[derive(Debug, Default)]
 pub struct VaultIndex {
     notes: HashMap<String, NoteMeta>,
+    contents: HashMap<String, NoteText>,
     forward: HashMap<String, Vec<Edge>>,
     backlinks: HashMap<String, HashSet<String>>,
     /// normalized target key → sources that have an edge with that key.
@@ -80,10 +98,17 @@ impl VaultIndex {
             index.notes.insert(meta.id.clone(), meta.clone());
             index.resolver.add(&meta.id);
         }
-        // Phase 2: parse and resolve.
+        // Phase 2: parse, resolve, and retain text for search.
         for meta in metas {
             if let Ok(note) = vault.read_note(&meta.id) {
                 index.set_edges(&meta.id, index_edges(&index.resolver, &note.content));
+                index.contents.insert(
+                    meta.id.clone(),
+                    NoteText {
+                        lower: note.content.to_lowercase(),
+                        original: note.content,
+                    },
+                );
             }
         }
         Ok(index)
@@ -121,8 +146,77 @@ impl VaultIndex {
                 context,
             });
         }
-        entries.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        entries.sort_by_key(|a| a.title.to_lowercase());
         entries
+    }
+
+    /// Case-insensitive AND search over titles + bodies. Ranking: title
+    /// prefix > title contains > body match count. Sequential scan over the
+    /// in-memory lowercase text — measured single-digit ms at 10k notes.
+    pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+        let terms: Vec<String> = query
+            .to_lowercase()
+            .split_whitespace()
+            .take(8)
+            .map(String::from)
+            .collect();
+        if terms.is_empty() {
+            return Vec::new();
+        }
+
+        let mut scored: Vec<(i64, SearchHit)> = Vec::new();
+        for (id, meta) in &self.notes {
+            let title_lower = meta.title.to_lowercase();
+            let text = self.contents.get(id);
+            let mut score = 0i64;
+            let mut matched_all = true;
+            let mut body_matched = false;
+
+            for term in &terms {
+                let in_title = title_lower.contains(term.as_str());
+                if in_title {
+                    score += if title_lower.starts_with(term.as_str()) {
+                        120
+                    } else {
+                        60
+                    };
+                }
+                let body_hits = text
+                    .map(|t| t.lower.matches(term.as_str()).take(20).count())
+                    .unwrap_or(0);
+                if body_hits > 0 {
+                    body_matched = true;
+                    score += 8 + body_hits as i64;
+                }
+                if !in_title && body_hits == 0 {
+                    matched_all = false;
+                    break;
+                }
+            }
+            if !matched_all {
+                continue;
+            }
+
+            let snippet = if body_matched {
+                text.map(|t| snippet_for(&t.original, &terms)).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            scored.push((
+                score,
+                SearchHit {
+                    id: id.clone(),
+                    title: meta.title.clone(),
+                    snippet,
+                },
+            ));
+        }
+
+        scored.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| a.1.title.to_lowercase().cmp(&b.1.title.to_lowercase()))
+        });
+        scored.into_iter().take(limit).map(|(_, h)| h).collect()
     }
 
     /// Snapshot of the whole graph: every note (including isolated ones),
@@ -195,6 +289,13 @@ impl VaultIndex {
     pub fn upsert_note(&mut self, id: &str, content: &str, meta: NoteMeta) {
         let is_new = !self.notes.contains_key(id);
         self.notes.insert(id.to_string(), meta);
+        self.contents.insert(
+            id.to_string(),
+            NoteText {
+                original: content.to_string(),
+                lower: content.to_lowercase(),
+            },
+        );
         if is_new {
             self.resolver.add(id);
         }
@@ -211,6 +312,7 @@ impl VaultIndex {
         self.set_edges(id, Vec::new());
         self.forward.remove(id);
         self.notes.remove(id);
+        self.contents.remove(id);
         self.resolver.remove(id);
         self.backlinks.remove(id);
         // Edges that resolved to this note must re-resolve (likely to None).
@@ -226,6 +328,9 @@ impl VaultIndex {
         self.resolver.remove(old_id);
         self.notes.insert(new_id.clone(), new_meta);
         self.resolver.add(&new_id);
+        if let Some(text) = self.contents.remove(old_id) {
+            self.contents.insert(new_id.clone(), text);
+        }
 
         // Move outgoing edges: rewrite source in target_index and backlinks.
         for edge in &edges {
@@ -327,6 +432,23 @@ impl VaultIndex {
     }
 }
 
+/// First line (trimmed, capped) whose lowercase form contains any term.
+/// Works line-by-line on the original text, so multi-byte lowercasing can
+/// never misalign offsets.
+fn snippet_for(original: &str, terms: &[String]) -> String {
+    for line in original.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_lowercase();
+        if terms.iter().any(|t| lower.contains(t.as_str())) {
+            return trimmed.chars().take(180).collect();
+        }
+    }
+    String::new()
+}
+
 fn index_edges(resolver: &Resolver, content: &str) -> Vec<Edge> {
     parse_wikilinks(content)
         .into_iter()
@@ -376,6 +498,24 @@ mod tests {
         i.upsert_note("A.md", "[[B]] again", meta("A.md"));
         i.remove_note("B.md");
         assert!(bl(&i, "B.md").is_empty());
+    }
+
+    #[test]
+    fn search_ranks_titles_over_bodies() {
+        let mut i = VaultIndex::default();
+        i.upsert_note("Graph Theory.md", "about structures", meta("Graph Theory.md"));
+        i.upsert_note("Notes.md", "graph graph graph everywhere", meta("Notes.md"));
+        i.upsert_note("Unrelated.md", "nothing here", meta("Unrelated.md"));
+
+        let hits = i.search("graph", 10);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].id, "Graph Theory.md"); // title prefix beats body count
+        assert_eq!(hits[1].id, "Notes.md");
+        assert!(hits[1].snippet.contains("graph"));
+
+        // AND semantics: both terms must appear somewhere.
+        assert_eq!(i.search("graph everywhere", 10).len(), 1);
+        assert!(i.search("zzz", 10).is_empty());
     }
 
     #[test]

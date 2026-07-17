@@ -36,6 +36,7 @@ pub fn run() {
             commands::read_note,
             commands::get_backlinks,
             commands::get_graph,
+            commands::search,
             commands::write_note,
             commands::create_note,
             commands::rename_note,

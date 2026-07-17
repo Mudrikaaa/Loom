@@ -15,6 +15,7 @@ import {
   type FilesChangedPayload,
   type GraphData,
   type NoteMeta,
+  type SearchHit,
 } from "../lib/types";
 import { normalizeTarget, resolveTarget } from "../lib/resolve";
 
@@ -58,6 +59,10 @@ interface LoomStore {
   graph: GraphData | null;
   graphLoading: boolean;
 
+  searchQuery: string;
+  /** null = search inactive; [] = active with no matches. */
+  searchResults: SearchHit[] | null;
+
   boot(): Promise<void>;
   pickVault(): Promise<void>;
   openVaultPath(path: string): Promise<void>;
@@ -76,6 +81,9 @@ interface LoomStore {
   setView(view: "editor" | "graph"): void;
   loadGraph(): Promise<void>;
 
+  setSearchQuery(query: string): void;
+  clearSearch(): void;
+
   handleFilesChanged(payload: FilesChangedPayload): void;
   refreshBacklinks(): Promise<void>;
   /** Conflict banner: replace editor content with the disk version. */
@@ -84,6 +92,14 @@ interface LoomStore {
   conflictKeepMine(): Promise<void>;
   /** Conflict banner (deleted): drop my version and close the note. */
   conflictDiscard(): void;
+}
+
+// HMR of this module would create a fresh store stuck at phase "boot" with
+// no one left to call boot() — force a full page reload instead (dev only).
+if (import.meta.hot) {
+  import.meta.hot.accept(() => {
+    import.meta.hot?.invalidate();
+  });
 }
 
 const AUTOSAVE_MS = 800;
@@ -115,6 +131,29 @@ function scheduleGraphRefresh(store: () => LoomStore) {
   }, GRAPH_REFRESH_MS);
 }
 
+const SEARCH_DEBOUNCE_MS = 150;
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+let searchSeq = 0;
+
+function runSearch(store: () => LoomStore) {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchTimer = null;
+    const query = store().searchQuery;
+    if (!query.trim()) return;
+    const seq = ++searchSeq;
+    void ipc
+      .search(query)
+      .then((results) => {
+        // Only the latest in-flight query may write results.
+        if (seq === searchSeq && store().searchQuery === query) {
+          useStore.setState({ searchResults: results });
+        }
+      })
+      .catch(() => {});
+  }, SEARCH_DEBOUNCE_MS);
+}
+
 function sortNotes(notes: NoteMeta[]): NoteMeta[] {
   return [...notes].sort((a, b) =>
     a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
@@ -138,6 +177,8 @@ export const useStore = create<LoomStore>((set, get) => ({
   view: "editor",
   graph: null,
   graphLoading: false,
+  searchQuery: "",
+  searchResults: null,
 
   async boot() {
     void ipc.onFilesChanged((payload) => get().handleFilesChanged(payload));
@@ -165,6 +206,7 @@ export const useStore = create<LoomStore>((set, get) => ({
 
   async openVaultPath(path: string) {
     await get().closeNote();
+    get().clearSearch();
     if (graphTimer) {
       clearTimeout(graphTimer);
       graphTimer = null;
@@ -352,11 +394,32 @@ export const useStore = create<LoomStore>((set, get) => ({
     }
   },
 
+  setSearchQuery(query: string) {
+    if (!query.trim()) {
+      get().clearSearch();
+      return;
+    }
+    set({ searchQuery: query, searchResults: get().searchResults ?? [] });
+    runSearch(get);
+  },
+
+  clearSearch() {
+    if (searchTimer) {
+      clearTimeout(searchTimer);
+      searchTimer = null;
+    }
+    searchSeq++;
+    set({ searchQuery: "", searchResults: null });
+  },
+
   handleFilesChanged(payload: FilesChangedPayload) {
     const { changed, removed, origin } = payload;
 
     // Keep the graph fresh (debounced) once it has been loaded.
     if (get().graph !== null) scheduleGraphRefresh(get);
+
+    // Re-run an active search against the updated index.
+    if (get().searchResults !== null) runSearch(get);
 
     // Merge into the note list.
     set((s) => {

@@ -8,6 +8,7 @@ import type {
   GraphData,
   NoteContent,
   NoteMeta,
+  SearchHit,
   VaultSnapshot,
 } from "./types";
 
@@ -54,6 +55,10 @@ export function getBacklinks(id: string): Promise<BacklinkEntry[]> {
 
 export function getGraph(): Promise<GraphData> {
   return invoke("get_graph");
+}
+
+export function search(query: string): Promise<SearchHit[]> {
+  return invoke("search", { query });
 }
 
 export function onFilesChanged(

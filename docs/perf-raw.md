@@ -25,10 +25,19 @@ Notes:
 - Incremental upsert is the per-file-event cost: effectively free at any scale.
 - Graph snapshot excludes IPC serialization; frontend refresh is debounced 1.5 s.
 
-## Frontend FPS (3D graph, in-app meter) — to be filled from user readings
+## Frontend FPS (3D graph, in-app meter, user-verified screenshots)
 
-| Vault | Initial layout | After settle | Interaction (orbit/zoom) |
+Two renderers, selected by node count:
+- ≤ 2000 nodes: react-force-graph-3d (per-object; bloom, labels, hover focus)
+- > 2000 nodes: custom instanced fast path (1 InstancedMesh for all nodes +
+  1 LineSegments batch for all links = 2 draw calls; same d3-force-3d layout)
+
+| Vault | Renderer | FPS (settled/orbiting) | Notes |
 | --- | --- | --- | --- |
-| user vault | | | |
-| vault-5k | | | |
-| vault-10k | | | |
+| vault-1k (1,223 n / 5,924 l) | library | ~27–29 fps | with bloom + fog + hover focus |
+| vault-5k (5,492 n / 39,820 l) | library (before fast path) | **5 fps** — unacceptable, motivated the fast path | |
+| vault-5k (5,492 n / 39,820 l) | instanced fast path | **60 fps** | screenshot-verified 2026-07-17 |
+| vault-10k (10,500 n / 80,015 l) | instanced fast path | **60 fps** | screenshot-verified 2026-07-17 |
+
+Settling phase on the fast path is bounded by the d3 physics tick on the main
+thread (visibly chunky for the first seconds at 10k), then locks to 60.

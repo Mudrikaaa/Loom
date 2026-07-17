@@ -15,17 +15,24 @@ import { FogExp2 } from "three";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { useStore } from "../state/store";
 import type { GraphNode } from "../lib/types";
+import { BigGraph } from "./BigGraph";
+import { FpsMeter } from "./FpsMeter";
+import {
+  COLOR_CURRENT,
+  COLOR_DIM,
+  COLOR_HOVER,
+  COLOR_LINK,
+  COLOR_LINK_DIM,
+  COLOR_LINK_HOVER,
+  COLOR_NOTE,
+  COLOR_NOTE_HUB,
+  COLOR_PHANTOM,
+  FOG_COLOR,
+} from "./palette";
 
-const COLOR_NOTE = "#e893c0";
-const COLOR_NOTE_HUB = "#f5c3de";
-const COLOR_PHANTOM = "#6f6169";
-const COLOR_CURRENT = "#ffeaf5";
-const COLOR_HOVER = "#f9cfe6";
-const COLOR_DIM = "#251a21";
-const COLOR_LINK = "#533247";
-const COLOR_LINK_HOVER = "#ef9ecb";
-const COLOR_LINK_DIM = "#170f15";
 const LABEL_LIMIT = 400; // above this, labels only on hover
+/** Above this node count, the instanced fast-path renderer takes over. */
+const BIG_GRAPH_THRESHOLD = 2000;
 
 interface LinkEnd {
   id: string;
@@ -37,33 +44,6 @@ interface RuntimeLink {
 
 function endId(end: string | LinkEnd): string {
   return typeof end === "object" ? end.id : end;
-}
-
-/** Frames-per-second probe: honest numbers for the stress test. */
-function FpsMeter({ nodes, links }: { nodes: number; links: number }) {
-  const [fps, setFps] = useState(0);
-  useEffect(() => {
-    let frames = 0;
-    let last = performance.now();
-    let raf = 0;
-    const tick = () => {
-      frames++;
-      const now = performance.now();
-      if (now - last >= 1000) {
-        setFps(Math.round((frames * 1000) / (now - last)));
-        frames = 0;
-        last = now;
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-  return (
-    <div className="fps-meter">
-      {fps} fps · {nodes} nodes · {links} links
-    </div>
-  );
 }
 
 export function GraphView() {
@@ -112,7 +92,7 @@ export function GraphView() {
     if (!fg || nodeCount === 0) return;
     const density = nodeCount > 2000 ? 0.0007 : nodeCount > 500 ? 0.001 : 0.0014;
     const scene = fg.scene();
-    scene.fog = new FogExp2(0x0f0c0f, density);
+    scene.fog = new FogExp2(FOG_COLOR, density);
     return () => {
       scene.fog = null;
     };
@@ -206,6 +186,12 @@ export function GraphView() {
         </div>
       </main>
     );
+  }
+
+  // Large vaults get the instanced fast-path renderer (2 draw calls total)
+  // instead of the per-object library renderer.
+  if (data.nodes.length > BIG_GRAPH_THRESHOLD) {
+    return <BigGraph key={`${graph.nodes.length}:${graph.links.length}`} graph={graph} />;
   }
 
   return (

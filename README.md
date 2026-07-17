@@ -27,8 +27,10 @@ Write in plain Markdown, link your ideas with `[[wikilinks]]`, and watch your no
 - 🔗 **Wikilinks & backlinks** — Connect notes with `[[links]]` and see every note that references the current one.
 - 🌐 **3D knowledge graph** — Explore your vault as an interactive force-directed 3D graph of notes and links.
 - 📁 **Local-first vault** — Everything is plain Markdown on your disk; pick any folder as your vault.
+- 🔍 **Fast search** — Title + full-text search with ranked results and highlighted snippets (~40 ms across 10,000 notes).
 - 👀 **Live file syncing** — Changes on disk are watched and reflected instantly, with conflict handling.
 - 🗑️ **Safe delete** — Removed notes go to the system trash, not oblivion.
+- ⚡ **Scales for real** — Verified at 10,000 notes / 80,000 links at 60 fps via an instanced fast-path renderer.
 
 ---
 
@@ -48,8 +50,8 @@ Write in plain Markdown, link your ideas with `[[wikilinks]]`, and watch your no
 ## 📦 Getting Started
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) 18+
-- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
+- [Node.js](https://nodejs.org/) 20+
+- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain; MSVC on Windows)
 - Platform dependencies for [Tauri](https://tauri.app/start/prerequisites/)
 
 ### Run in development
@@ -62,6 +64,49 @@ npm run tauri dev
 ```bash
 npm run tauri build
 ```
+
+### Platform support
+
+| Platform | Status |
+|---|---|
+| Windows 11 | ✅ **Tested** — all development and the full stress test ran here |
+| macOS | ⚠️ Assumed working via Tauri; not tested |
+| Linux | ⚠️ Assumed working via Tauri (needs `webkit2gtk`); not tested |
+
+---
+
+## ⚔️ Conflict handling
+
+External edits during an open session are never silently lost:
+
+| Situation | Behavior |
+|---|---|
+| Open note, no unsaved edits, changed on disk | Auto-reload + toast |
+| Open note, unsaved edits, changed on disk | Banner: **Reload from disk** / **Keep mine (overwrite)**; saves blocked until you choose |
+| Save races an external change (mtime precondition fails) | Same banner |
+| Open note deleted on disk while dirty | Banner: **Discard my version** / **Restore my version** |
+
+---
+
+## 📊 Performance & stress testing
+
+A deterministic synthetic-vault generator and an index benchmark ship as Rust binaries:
+
+```bash
+cd src-tauri
+cargo run --release --bin genvault -- --out ../vault-5k --notes 5000 --avg-links 8
+cargo run --release --bin benchindex -- ../vault-5k
+```
+
+Measured results (1k / 5k / 10k notes) live in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
+---
+
+## 📚 Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) — process boundaries, data model, incremental index invariants, the dual-renderer graph.
+- [Performance report](docs/PERFORMANCE.md) — methodology and measured numbers.
+- [Limitations & roadmap](docs/LIMITATIONS.md) — known limitations and upgrade directions.
 
 ---
 

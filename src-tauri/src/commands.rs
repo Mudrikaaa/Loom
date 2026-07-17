@@ -11,7 +11,7 @@ use tauri::{AppHandle, State};
 use crate::config;
 use crate::error::{AppError, Result};
 use crate::events::{emit_files_changed, FilesChangedOrigin};
-use crate::index::{BacklinkEntry, GraphData, VaultIndex};
+use crate::index::{BacklinkEntry, GraphData, SearchHit, VaultIndex};
 use crate::vault::{NoteContent, NoteMeta, Vault};
 use crate::{watcher, AppState};
 
@@ -99,6 +99,11 @@ pub fn get_backlinks(state: State<AppState>, id: String) -> Result<Vec<BacklinkE
 #[tauri::command]
 pub fn get_graph(state: State<AppState>) -> Result<GraphData> {
     with_index(&state, |i| i.graph())
+}
+
+#[tauri::command]
+pub fn search(state: State<AppState>, query: String) -> Result<Vec<SearchHit>> {
+    with_index(&state, |i| i.search(&query, 50))
 }
 
 #[tauri::command]

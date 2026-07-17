@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useStore } from "../state/store";
 import { LoomLogo } from "./Logo";
+import { SearchBar, Highlight } from "./SearchBar";
 import type { NoteMeta } from "../lib/types";
 
 function vaultName(root: string): string {
@@ -86,8 +87,12 @@ export function Sidebar() {
   const createNote = useStore((s) => s.createNote);
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
+  const searchQuery = useStore((s) => s.searchQuery);
+  const searchResults = useStore((s) => s.searchResults);
+  const openNote = useStore((s) => s.openNote);
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
+  const searching = searchResults !== null;
 
   return (
     <aside className="sidebar">
@@ -123,6 +128,8 @@ export function Sidebar() {
         </span>
       </header>
 
+      <SearchBar />
+
       {creating && (
         <div className="new-note-box">
           <input
@@ -144,7 +151,37 @@ export function Sidebar() {
         </div>
       )}
 
-      {notes.length === 0 ? (
+      {searching ? (
+        searchResults.length === 0 ? (
+          <div className="sidebar-empty">
+            <p className="muted">No matches for “{searchQuery}”.</p>
+          </div>
+        ) : (
+          <ul className="note-list">
+            {searchResults.map((hit) => (
+              <li
+                key={hit.id}
+                className={`note-row${hit.id === currentId ? " active" : ""}`}
+              >
+                <button
+                  className="note-row-main"
+                  onClick={() => void openNote(hit.id)}
+                  title={hit.id}
+                >
+                  <span className="note-title">
+                    <Highlight text={hit.title} query={searchQuery} />
+                  </span>
+                  {hit.snippet && (
+                    <span className="result-snippet">
+                      <Highlight text={hit.snippet} query={searchQuery} />
+                    </span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )
+      ) : notes.length === 0 ? (
         <div className="sidebar-empty">
           <p>No notes yet.</p>
           <p className="muted">
@@ -160,7 +197,9 @@ export function Sidebar() {
       )}
 
       <footer className="sidebar-footer">
-        {notes.length} note{notes.length === 1 ? "" : "s"}
+        {searching
+          ? `${searchResults.length} match${searchResults.length === 1 ? "" : "es"}`
+          : `${notes.length} note${notes.length === 1 ? "" : "s"}`}
       </footer>
     </aside>
   );

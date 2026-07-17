@@ -46,6 +46,17 @@ fn main() {
         println!("incremental upsert (avg of {REPS}): {:?}", t.elapsed() / REPS);
     }
 
+    // Search latency (what one debounced keystroke costs).
+    for query in ["graph", "lattice kernel", "note 00042"] {
+        let t = Instant::now();
+        let hits = index.search(query, 50);
+        println!(
+            "search {query:?}:   {:?} ({} hits)",
+            t.elapsed(),
+            hits.len()
+        );
+    }
+
     // Backlink queries (what opening a note costs).
     let t = Instant::now();
     let mut total = 0usize;
